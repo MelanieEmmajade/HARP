@@ -1,2 +1,2 @@
 # HARP
-Example code and data to calculate HARP metrics
+R-implementation of the HARP metrics, together with example code.  
