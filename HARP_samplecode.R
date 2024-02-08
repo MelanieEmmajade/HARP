@@ -394,9 +394,9 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
                     peaktime_C_proportion
     )
   } else {  # no loops
-    plot_title = sprintf("%s: %s",eventname, thingy)
+    plot_title = sprintf("%s: %s",eventname, constituent_name)
     xlabel <- "Normalised flux"
-    ylabel <- paste("Normalised", thingy)
+    ylabel <- paste("Normalised", constituent_name)
     line1 = sprintf("$A = %0.2f$, $R = %0.3f$",
                     area,
                     residual               
