@@ -293,14 +293,13 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     Q_unscaled <- interceptQ * (max(dfi$Qi) - min(dfi$Qi)) + min(dfi$Qi)
     C_unscaled <- interceptC * (max(dfi$Ci) - min(dfi$Ci)) + min(dfi$Ci)
     
-    #TODO need to check back with original code, I think an error here.
     
     return(c(Q_unscaled, C_unscaled, NA, interceptQ, interceptC)) # need to interpolate the Time here first ... and it happens TWICE (once in rise, once in fall)
   }
   
   
   fig8_loop_flag = 0
-  if (length(fig8_row_id > 0)){ # I'm kind of assuming it'll never have a double loop here ... might need to fix this later
+  if (length(fig8_row_id > 0)){ # this assumes a single loop only at this stage
     fig8_loop_flag = 1
     
     #calculate the intercept 
