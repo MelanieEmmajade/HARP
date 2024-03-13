@@ -1,4 +1,5 @@
 # HARP_samplecode.R
+# Version 2.0 (released March 2024)
 
 # Author: Melanie E Roberts
 # Date: June 2022
@@ -7,9 +8,14 @@
 # This project is in collaboration with Donghwan Kim, Jing Lu and David Hamilton
 # If you use this code please cite this GitHub repository 
 # and the associated paper Melanie E. Roberts, Donghwan Kim, Jing Lu & David P. Hamilton,
-HARP: A suite of parameters to describe the hysteresis of streamflow and water quality constituents,
-Journal of Hydrology, 2023, doi:10.1016/j.jhydrol.2023.130262.
+# HARP: A suite of parameters to describe the hysteresis of streamflow and water quality constituents,
+# Journal of Hydrology, 2023, doi:10.1016/j.jhydrol.2023.130262.
 # 
+# ------------------------------------------------------------------------------
+# CHANGE LOG
+#  8 February 2024 - correction to plotting labels with no figure 8
+#  13 March 2024 - Version 2.0 Improved interpolation
+#
 # ------------------------------------------------------------------------------
 
 
@@ -78,7 +84,6 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     #' used to generate the circle that represents the Area metric in plots
     #' 
     #' Default generates a circle centred at (0.5, 0.5) with radius 1.  
-    #' Call specifying just the radius in this code once I get that working
     
     r = rad
     tt <- seq(0, 2 * pi, length.out = npoints)
@@ -87,17 +92,63 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     return(data.frame(x = xx, y = yy))
   }
   
-  interpolated <- function(df,column_name){
-    #' interpolated
+  interpolatedX <- function(i, x, y, ynew) {
+    #' interpolatedX
     #' 
-    #' a function to interpolate the data to a finer grid wrt the flux
+    #' a function to interpolate the data to a finer grid wrt the flux (y-value)
+    #' using the method of linear interpolation between observations
     #' 
-    #' df - dataframe containing the information
-    #' column_name - name of the column in the dataframe to be interpolated
-    #' this will typically be the concentration C or the time Etime.
+    #' i - index of the current value in the dataframe
+    #' x - x-value of the observed data (typically time)
+    #' y - y-value of the observed data (typically flux)
+    #' ynew - the new y-value to be interpolated to (finer grid, typically flux)
     #' 
-    int = approx(x = df$Q, y = df[,column_name], xout = Qlist, method = "linear")
-    return(int$y)
+    m <- (y[i + 1] - y[i]) / (x[i + 1] - x[i])  # calculate the gradient
+    c <- y[i] - m * x[i]  # calculate the intercept
+    
+    Xnew <- (ynew - c) / m  # interpolated x-value
+    return(Xnew)
+  }
+  
+  interpolate_data <- function(x, y, ynew) {
+    #' interpolate_data
+    #' 
+    #' a function to work through the observed data and interpolate between subsequent points
+    #' here the new values are in the response (typically flux) and we seek the x-values (typically time)
+    #' x - x-values of the observed data (typically time)
+    #' y - y-values of the observed data (typically flux)
+    #' ynew - the new y-value to be interpolated to (finer grid, typically flux)
+    #' 
+    mydata <- data.frame(X = numeric(), y_new = numeric()) 
+    
+    for (i in 1:(length(y) - 1)) {
+      # iterate through the list of y-values (typically flux) and interpolate between each pair of observations
+      ystart <- y[i]
+      yend <- y[i + 1]
+      
+      if (i == length(y) - 1) {  # if we are at the last point
+        if (ystart < yend) {
+          Y_inbetween_start_and_end <- which(ynew >= ystart & ynew <= yend)  # identify the points in the new y-values that are between the pair of observations
+        } else {  # yend < ystart
+          Y_inbetween_start_and_end <- which(ynew >= yend & ynew <= ystart)
+        }
+      } else { # if we are not at the last point
+        if (ystart < yend) {
+          Y_inbetween_start_and_end <- which(ynew >= ystart & ynew < yend)
+        } else { # yend < ystart
+          Y_inbetween_start_and_end <- which(ynew > yend & ynew <= ystart)
+        }
+      }
+      
+      for (j in 1:(length(Y_inbetween_start_and_end) - 1)) {
+        pos_in_ynew <- Y_inbetween_start_and_end[j]
+        newX <- interpolatedX(i, x, y, ynew[pos_in_ynew] )
+        mydata <- rbind(mydata, data.frame(X = newX, y_new = ynew[pos_in_ynew]))
+      }
+    }
+    
+    mydata <- mydata %>% drop_na() %>% arrange(X)  # remove any NA values and reorder the dataframe
+    return(mydata)
   }
   
   minmaxNormalisation <- function(theData) {
@@ -160,13 +211,20 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
   # interpolate along the rising and falling branches
   Qlist = seq(max_of_the_mins, maxQ, length = 500) 
   
-  dfi_rise = data.frame("Qi" = Qlist) # df for interpolated data rising branch
-  dfi_rise$Ci = interpolated(rising_branch, "C") 
-  dfi_rise$Itime = interpolated(rising_branch, "Etime") 
+    # rising branch
   
-  dfi_fall = data.frame("Qi" = Qlist)  # df for interpolated data falling branch
-  dfi_fall$Ci = interpolated(falling_branch, "C")
-  dfi_fall$Itime = interpolated(falling_branch, "Etime")
+  tmp_time <- interpolate_data(rising_branch$Etime, rising_branch$Q, Qlist)  #  (x_observations, y_observations, y_new)  Interpolate time given finer Q list for interpolation
+  dfi_rise <- data.frame("Itime" = tmp_time$X, "Qi" = tmp_time$y_new)  # df for interpolated data rising branch
+  
+  tmp_conc <- approx(x = rising_branch$Etime, y = rising_branch$C, xout = dfi_rise$Itime, method = "linear") # interpolate concentration using interpolated time
+  dfi_rise$Ci <- tmp_conc$y  # add the interpolated concentration to the dataframe
+  
+    # falling branch
+  tmp_time <- interpolate_data(falling_branch$Etime, falling_branch$Q, Qlist)  #  (x_observations, y_observations, y_new)  Interpolate time given finer Q list for interpolation
+  dfi_fall <- data.frame("Itime" = tmp_time$X, "Qi" = tmp_time$y_new)  # df for interpolated data falling branch
+  
+  tmp_conc <- approx(x = falling_branch$Etime, y = falling_branch$C, xout = dfi_fall$Itime, method = "linear") #   interpolate concentration using interpolated time
+  dfi_fall$Ci <- tmp_conc$y  # add the interpolated concentration to the dataframe
   
   dfi = rbind(dfi_rise, dfi_fall)  # df for interpolated data
   dfi = unique(dfi) # remove the duplicate at the turning point
@@ -420,8 +478,8 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     geom_path(data = circ_equiv_minmax,
               mapping = aes(x, y),
               color = 'deeppink3',
-              size = 0.3) +  # equivalent area circle
-    geom_abline(color = 'gray77', size = 0.1) + 
+              linewidth = 0.3) +  # equivalent area circle
+    geom_abline(color = 'gray77', linewidth = 0.1) + 
     coord_fixed() +
     ggtitle(TeX(line1)) +  xlab(theXlabel) + ylab(theYlabel) +
     labs(color = legend_label, subtitle = TeX(line2)) +
