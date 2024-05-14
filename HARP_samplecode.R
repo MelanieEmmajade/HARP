@@ -1,5 +1,5 @@
 # HARP_samplecode.R
-# Version 2.0 (released March 2024)
+# Version 2.1 (released May 2024)
 
 # Author: Melanie E Roberts
 # Date: June 2022
@@ -354,7 +354,14 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     
     return(c(Q_unscaled, C_unscaled, NA, interceptQ, interceptC)) # need to interpolate the Time here first ... and it happens TWICE (once in rise, once in fall)
   }
-  
+
+  get_sign_of_larger_area <- function(Area1, Area2){  # identify which part of the figure 8 loop is larger
+  if (abs(Area1) > abs(Area2)){
+    return(sign(Area1))
+  } else {
+    return(sign(Area2))
+  }
+}
   
   fig8_loop_flag = 0
   if (length(fig8_row_id > 0)){ # this assumes a single loop only at this stage
@@ -401,7 +408,7 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     area_loop2 <- trapz(new_loop2$Qsi, new_loop2$Csi)
     
     total_area <- abs(area_loop1) + abs(area_loop2)  # add the area magnitudes together
-    area_sign <- sign(area_loop1 - area_loop2)  # determine if predominantly enriching (-) or diluting (+)
+    area_sign <- get_sign_of_larger_area(area_loop1, area_loop2)  # determine if predominantly enriching (-) or diluting (+)
     
     area <- area_sign * total_area  # include sign with area metric
     
