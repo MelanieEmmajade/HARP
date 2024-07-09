@@ -15,6 +15,7 @@
 # CHANGE LOG
 #  8 February 2024 - correction to plotting labels with no figure 8
 #  13 March 2024 - Version 2.0 Improved interpolation
+#  18 May 2024 - Version 2.1 Changed how figure eight loop area signs are calculated
 #
 # ------------------------------------------------------------------------------
 
