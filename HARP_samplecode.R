@@ -1,5 +1,5 @@
 # HARP_samplecode.R
-# Version 2.1 (released May 2024)
+# Version 2.2 (released July 2024)
 
 # Author: Melanie E Roberts
 # Date: June 2022
@@ -16,6 +16,7 @@
 #  8 February 2024 - correction to plotting labels with no figure 8
 #  13 March 2024 - Version 2.0 Improved interpolation
 #  18 May 2024 - Version 2.1 Changed how figure eight loop area signs are calculated
+#  20 July 2024 - Version 2.2 Corrections to bugs introduced with previous update
 #
 # ------------------------------------------------------------------------------
 
@@ -29,6 +30,7 @@ library(shotGroups)
 library(caTools)
 library(latex2exp)
 library(docstring) 
+library(ggplot2)
 
 
 filename = "sampleData_fig8.csv"
@@ -56,6 +58,13 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     C = concentration
   )
   
+  df_obs[] <- lapply(df_obs, as.numeric)  # ensure that is recognised as numeric
+  
+  # OPTIONAL plot to explore the original data
+  # ggplot(data = df_obs, aes(x = Q, y = C, color = Etime)) +
+  #   geom_path() +
+  #   geom_point()
+  
   
   # 2. Set up metric_df to store calculated metrics
   metric_df <- data.frame(matrix(NA, nrow = 1, ncol = 7))
@@ -71,11 +80,11 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
   colnames(metric_df) <- columnNames
   
   # 3. Functions used for data wrangling:
-      # genCircle - generates the circle in the plots for Area metric
-      # interpolated - to interpolate the datasets to a finer grid
-      # minmaxNormalisation - for normalising data to [0,1]
-      # normalise_observations_flux - to normalise the flux observations based on the interpolated dataset truncated to a closed loop
-      # normalise_observations_C - to normalise the concentration observations based on the interpolated dataset truncated to a closed loop
+   # genCircle - generates the circle in the plots for Area metric
+   # interpolated - to interpolate the datasets to a finer grid
+   # minmaxNormalisation - for normalising data to [0,1]
+   # normalise_observations_flux - to normalise the flux observations based on the interpolated dataset truncated to a closed loop
+   # normalise_observations_C - to normalise the concentration observations based on the interpolated dataset truncated to a closed loop
   
   genCircle <-   function(rad = 1.0,  
                           center = c(0.5, 0.5),
@@ -141,7 +150,7 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
         }
       }
       
-      for (j in 1:(length(Y_inbetween_start_and_end) - 1)) {
+      for (j in 1:(length(Y_inbetween_start_and_end))){
         pos_in_ynew <- Y_inbetween_start_and_end[j]
         newX <- interpolatedX(i, x, y, ynew[pos_in_ynew] )
         mydata <- rbind(mydata, data.frame(X = newX, y_new = ynew[pos_in_ynew]))
@@ -217,14 +226,14 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
   tmp_time <- interpolate_data(rising_branch$Etime, rising_branch$Q, Qlist)  #  (x_observations, y_observations, y_new)  Interpolate time given finer Q list for interpolation
   dfi_rise <- data.frame("Itime" = tmp_time$X, "Qi" = tmp_time$y_new)  # df for interpolated data rising branch
   
-  tmp_conc <- approx(x = rising_branch$Etime, y = rising_branch$C, xout = dfi_rise$Itime, method = "linear") # interpolate concentration using interpolated time
+  tmp_conc <- approx(x = rising_branch$Etime, y = rising_branch$C, xout = dfi_rise$Itime, method = "linear", rule = 2) # interpolate concentration using interpolated time,. rule 2 ensures that numerical rounding errors with the x_out does not lead to NA values as it allows extrapolation
   dfi_rise$Ci <- tmp_conc$y  # add the interpolated concentration to the dataframe
   
     # falling branch
   tmp_time <- interpolate_data(falling_branch$Etime, falling_branch$Q, Qlist)  #  (x_observations, y_observations, y_new)  Interpolate time given finer Q list for interpolation
   dfi_fall <- data.frame("Itime" = tmp_time$X, "Qi" = tmp_time$y_new)  # df for interpolated data falling branch
   
-  tmp_conc <- approx(x = falling_branch$Etime, y = falling_branch$C, xout = dfi_fall$Itime, method = "linear") #   interpolate concentration using interpolated time
+  tmp_conc <- approx(x = falling_branch$Etime, y = falling_branch$C, xout = dfi_fall$Itime, method = "linear", rule = 2) #   interpolate concentration using interpolated time,  rule 2 ensures that numerical rounding errors with the x_out does not lead to NA values as it allows extrapolation
   dfi_fall$Ci <- tmp_conc$y  # add the interpolated concentration to the dataframe
   
   dfi = rbind(dfi_rise, dfi_fall)  # df for interpolated data
@@ -300,118 +309,258 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
   # Area
   
   # a. do we have a fig 8?
-  # asymmetry metric
+  # locating intercepts
   dfi_rise <- left_join(dfi_rise, dfi, by = c("Qi", "Ci", "Itime"))  # to get the scaled info
   dfi_fall <- left_join(dfi_fall, dfi, by = c("Qi", "Ci", "Itime"))
   
-  asym_df <- inner_join(dfi_rise, dfi_fall, by = c("Qsi", "Qi")) %>%
-    select(c("Qi", "Qsi", "Ci.x", "Ci.y", "Csi.x", "Csi.y")) %>% 
-    rename(Ci_rise = Ci.x, Ci_fall = Ci.y, Csi_rise = Csi.x, Csi_fall = Csi.y)
-  asym_df$asym <- asym_df$Csi_rise - asym_df$Csi_fall
+  segment_intercept_finder <- function(rising_point1_x, rising_point1_y, rising_point2_x, rising_point2_y, falling_point1_x, falling_point1_y, falling_point2_x, falling_point2_y) {
+    #' This function identifies intersections between the rising and falling branches (i.e. locating figure 8s)
+    #' The inputs are the start and end points of the segment in the rising and falling branch
+    #' The parameteric form of an equation along each segment is used to find potential intersections
+    #' The function returns the coordinates of the intersection point if it exists, otherwise NULL
+    
+    # Define the coordinates of the points
+    R_x1 <- rising_point1_x;    R_y1 <- rising_point1_y
+    R_x2 <- rising_point2_x;    R_y2 <- rising_point2_y
+    F_x1 <- falling_point1_x;   F_y1 <- falling_point1_y
+    F_x2 <- falling_point2_x;   F_y2 <- falling_point2_y
+    
+    # Define the coefficients of the linear equations
+    A <- matrix(c(R_x2 - R_x1, R_y2 - R_y1, F_x1 - F_x2,  F_y1 - F_y2), nrow = 2)
+    B <- matrix(c(F_x1 - R_x1, F_y1 - R_y1), nrow = 2)
+    
+    # Check if the determinant is zero
+    if (is.na(det(A))) {
+      return(NULL) # Lines do not intersect or are collinear
+    } 
+    else if (det(A) == 0) {
+      return(NULL)  # Lines do not intersect or are collinear
+    } else {
+      # Solve for the parameters in the parametric form of the equation
+      t_u <- solve(A, B)
+      t <- t_u[1]
+      u <- t_u[2]
+      
+      # Check if t and u lie between 0 and 1, i.e. whether the lines intersect between the end points of each segment
+      if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+        # Calculate the intersection point
+        intersection_x <- R_x1 + t * (R_x2 - R_x1)
+        intersection_y <- R_y1 + t * (R_y2 - R_y1)
+        
+        return(c(intersection_x, intersection_y)) # Return the intersection point
+      } else {
+        return(NULL)  # The intersection point does not lie within the line segments
+      }
+    }
+  }
+  
+  fig_8_intercepts <- function(rising_limb, falling_limb) {
+    # Initialize a list to store intersection points
+    intersections <- list()
+    
+    A <- data.frame(
+      X = rising_limb$Q,
+      Y = rising_limb$C
+    )
+    
+    B <- data.frame(
+      X = falling_limb$Q,
+      Y = falling_limb$C
+    )
+    
+    # Loop through all adjacent points in A and B
+    for (i in 1:(nrow(A) - 1)) {
+      for (j in 1:(nrow(B) - 1)) {
+        # Get the coordinates of the adjacent points
+        
+        x1 <- A$X[i]
+        y1 <- A$Y[i]
+        x2 <- A$X[i + 1]
+        y2 <- A$Y[i + 1]
+        
+        x3 <- B$X[j]
+        y3 <- B$Y[j]
+        x4 <- B$X[j + 1]
+        y4 <- B$Y[j + 1]
+        
+        # Find the intersection point
+        intersection <- segment_intercept_finder(x1, y1, x2, y2, x3, y3, x4, y4)
+        
+        # If an intersection exists, store it
+        if (!is.null(intersection)) {
+          intersections <- append(intersections, list(intersection))
+        }
+      }
+    }
+    
+    # return as a dataframe
+    df_ <- do.call(rbind, intersections)
+    df_ <- as.data.frame(df_)
+    
+    # Set column names
+    colnames(df_) <- c("Q", "C")
+    
+    intersections <- df_
+    return (intersections)
+  }
+  
+  scale_the_intercepts <- function(df_intercepts, df_All){
+    #' scaled_intercepts
+    #' This function scales the calculated intercepts of the loops using the truncated, interpolated dataset
+    min_for_Q_scaling <- min(df_All$Qi, na.rm = TRUE)
+    max_for_Q_scaling <- max(df_All$Qi, na.rm = TRUE)
+    
+    min_for_C_scaling <- min(df_All$Ci, na.rm = TRUE)
+    max_for_C_scaling <- max(df_All$Ci, na.rm = TRUE)
+    
+    # scale the intercepts
+    # Initialize the intercept_scaled data frame
+    intercept_scaled <- data.frame(
+      Qs = (df_intercepts$Q - min_for_Q_scaling) / (max_for_Q_scaling - min_for_Q_scaling),
+      Cs = (df_intercepts$C - min_for_C_scaling) / (max_for_C_scaling - min_for_C_scaling)
+    )
+    return(intercept_scaled)
+  }
+  
+  get_sign_of_larger_area <- function(Area1, Area2){  # identify whether the postive or negative loops are collectively larger
+    if (abs(Area1) > abs(Area2)){
+      return(sign(Area1))
+    } else {
+      return(sign(Area2))
+    }
+  }
+  
+  # identify the intercepts (if any) and then min-max normalise in Q and C
+  theIntercepts <- fig_8_intercepts(rising_branch, falling_branch)  # working with original observations
+  
+  eps = 1e-6 # remove intercepts at the turning point from rising to falling branch
+  theIntercepts <- theIntercepts[!(abs(theIntercepts$Q - maxQ) < eps | abs(theIntercepts$Q - max_of_the_mins) < eps), ]
+  
+  theIntercepts_scaled <- scale_the_intercepts(theIntercepts, df_all)  # scale the intercepts relative to df_all
+  
+  # OPTIONAL plot to observe location of calculated intercepts
+  # ggplot(data = df_obs, aes(x = Q, y = C, color = Etime)) +
+  #   geom_path() +
+  #   geom_point() + geom_point(data = theIntercepts, aes(x = Q, y = C), color = "red", size = 3)
 
-  asym_df$sign_change <- c(0, diff(sign(asym_df$asym))) # values !=0 means sign change
   
-  asym_df <- asym_df %>% filter(Qsi != 1.0)
-  fig8_row_id <- which(asym_df$sign_change != 0)  # row at which the figure eight crosses over itself.
+  if (is.null(theIntercepts) || nrow(theIntercepts) == 0){
+    fig8 = FALSE}  # no intercepts found
+  else
+  {fig8 = TRUE} # intercepts found
   
-  fig8_intercept <- function(){
+  split_by_intersections <- function(rise_df, fall_df, intersections) {
+    intersection_indices_rise <- which(rise_df$Qsi %in% intersections$Qs)  # identify the intersection indices in the rising branch based on the Q values
+    intersection_indices_fall <- which(fall_df$Qsi %in% intersections$Qs)  # " falling branch
     
-    #'fig8_intercept
-    #'
-    #'Find the intercept of the QC curve as it loops back on itself
-    #'assuming a straight line in the rise and falling curves 
-    #'from the nearest interpolated data points
-    #'
-    #'No parameters
+    # rising branch
+    segments_rise <- list() 
     
-    X1 <- asym_df$Qsi[fig8_row_id]  # flux values either side of the intercept
-    X2 <- asym_df$Qsi[fig8_row_id - 1]
+    if (length(intersection_indices_rise) == 1) {
+      segments_rise[[1]] <- rise_df[1:intersection_indices_rise[1], ]
+    }
+    else {
+      # Loop over each pair of intersection points to create segments 
+      for (i in seq_along(intersection_indices_rise)) {
+        if (i == 1) {
+          # First segment: from start to first intersection point
+          segments_rise[[i]] <- rise_df[1:intersection_indices_rise[i], ]
+        } else {
+          # Middle segments: from one intersection point to the next
+          segments_rise[[i]] <- rise_df[intersection_indices_rise[i-1]:intersection_indices_rise[i], ]
+        }
+      }
+    }
+    # Last segment: from last intersection point to end
+    segments_rise[[length(intersection_indices_rise) + 1]] <- rise_df[intersection_indices_rise[length(intersection_indices_rise)]:nrow(rise_df), ]
     
-    Yr1 <- asym_df$Csi_rise[fig8_row_id]  # concentration values either side of the intercept on rising branch
-    Yr2 <- asym_df$Csi_rise[fig8_row_id - 1]
+    # falling branch
+    segments_fall <- list() 
+    if (length(intersection_indices_fall) == 1) {
+      segments_fall[[1]] <- fall_df[1:intersection_indices_fall[1], ]
+    }
+    else {
+      for (i in seq_along(intersection_indices_fall)) {
+        if (i == 1) {
+          segments_fall[[i]] <- fall_df[1:intersection_indices_fall[i], ]
+        } else {
+          segments_fall[[i]] <- fall_df[intersection_indices_fall[i-1]:intersection_indices_fall[i], ]
+        }
+      }
+    }
+    segments_fall[[length(intersection_indices_fall) + 1]] <- fall_df[intersection_indices_fall[length(intersection_indices_fall)]:nrow(fall_df), ]
     
-    Yf1 <- asym_df$Csi_fall[fig8_row_id]  # concentration values either side of the intercept on falling branch
-    Yf2 <- asym_df$Csi_fall[fig8_row_id - 1]
+    segments <- list(rise = segments_rise, fall = segments_fall)
     
-    m_rise <- (Yr2 - Yr1) / (X2 - X1)  # y = mx + c; calculate gradient m on rising branch
-    c_rise <- Yr1 - m_rise * X1  # calculate intercept c
-    
-    m_fall<- (Yf2 - Yf1) / (X2 - X1)  # y = mx + c; calculate gradient m on falling branch
-    c_fall <- Yf1 - m_fall * X1  # calculate intercept c
-    
-    X_intercept <- (c_fall - c_rise) / (m_rise - m_fall)
-    Y_intercept <- m_rise * X_intercept + c_rise
-    
-    return(c(X_intercept, Y_intercept))
+    return(segments)
   }
   
-  put_intercept_into_new_df <- function(interceptXC){
-    interceptQ <- interceptXC[1]
-    interceptC <- interceptXC[2]
-    
-    Q_unscaled <- interceptQ * (max(dfi$Qi) - min(dfi$Qi)) + min(dfi$Qi)
-    C_unscaled <- interceptC * (max(dfi$Ci) - min(dfi$Ci)) + min(dfi$Ci)
-    
-    
-    return(c(Q_unscaled, C_unscaled, NA, interceptQ, interceptC)) # need to interpolate the Time here first ... and it happens TWICE (once in rise, once in fall)
-  }
-
-  get_sign_of_larger_area <- function(Area1, Area2){  # identify which part of the figure 8 loop is larger
-  if (abs(Area1) > abs(Area2)){
-    return(sign(Area1))
-  } else {
-    return(sign(Area2))
-  }
-}
   
   fig8_loop_flag = 0
-  if (length(fig8_row_id > 0)){ # this assumes a single loop only at this stage
-    fig8_loop_flag = 1
+  if (fig8){ # checks if any intercepts were found
+    fig8_loop_flag = 1  # there is at least one loop
     
-    #calculate the intercept 
-    myIntercept<- fig8_intercept()
+    for (i in 1:nrow(theIntercepts)){  # add each intercept to the dfi_rise and dfi_fall dataframes
+      
+      myIntercept <- theIntercepts[i, ]
+      myIntercept_scaled <- theIntercepts_scaled[i, ]
+      intercept_info <- c(NA, myIntercept$Q, myIntercept$C, myIntercept_scaled$Qs, myIntercept_scaled$Cs)
+      
+      # add this point to dfi dataframe & reorder
+      dfi_rise[(nrow(dfi_rise) + 1),] = intercept_info
+      
+      dfi_rise = dfi_rise[order(dfi_rise$Qsi),]
+      row.names(dfi_rise)<- NULL
+      dfi_rise$Itime <- na.approx(dfi_rise$Itime)
+      
+      rise_rowindex <- which(dfi_rise$Qsi == myIntercept_scaled[1,]$Qs)
+      
+      dfi_fall[(nrow(dfi_fall) + 1),] = intercept_info 
+      dfi_fall = dfi_fall[order(dfi_fall$Qsi),]
+      row.names(dfi_fall)<- NULL
+      dfi_fall$Itime <- na.approx(dfi_fall$Itime)
+      
+      fall_rowindex <- which(dfi_fall$Qsi == myIntercept_scaled[1,]$Qs)
+      
+      dfi[nrow(dfi) + 1,] = dfi_rise[rise_rowindex,]  # add the intercept point for the rise and the fall (different times) to the dfi dataframe  
+      dfi[nrow(dfi) + 1,] = dfi_fall[fall_rowindex,]
+      
+      dfi <- dfi[order(dfi$Itime),] # reorder in increasing time
+      row.names(dfi) <- NULL
+      
+    }
     
-    # add this point to dfi dataframe & reorder
-    dfi_rise[(nrow(dfi_rise) + 1),] = put_intercept_into_new_df(myIntercept) 
-    dfi_rise = dfi_rise[order(dfi_rise$Qsi),]
-    row.names(dfi_rise)<- NULL
-    dfi_rise$Itime <- na.approx(dfi_rise$Itime)
+    # Split the data frame
+    segments <- split_by_intersections(dfi_rise, dfi_fall, theIntercepts_scaled)  # use the interpolated rising and falling branches together with the scaled intercepts to split the df into each individual loop
     
-    rise_rowindex <- which(dfi_rise$Qsi == myIntercept[1])
+    # Form each loop and calculate the areas
+    loops <- list()
     
-    dfi_fall[(nrow(dfi_fall) + 1),] = put_intercept_into_new_df(myIntercept) 
-    dfi_fall = dfi_fall[order(dfi_fall$Qsi),]
-    row.names(dfi_fall)<- NULL
-    dfi_fall$Itime <- na.approx(dfi_fall$Itime)
+    for (i in 1: length(segments$rise)){  # create the loops
+      
+      loop_ <- rbind(segments$rise[[i]], segments$fall[[i]])
+      loop_ <- loop_[order(loop_$Itime),]
+      
+      loops[[i]] <- loop_
+    }
     
-    fall_rowindex <- which(dfi_fall$Qsi == myIntercept[1])
+    negAreas = 0  # need to sum up neg and pos separately
+    posAreas = 0
     
-    dfi[nrow(dfi) + 1,] = dfi_rise[rise_rowindex,]  # add the intercept point for the rise and the fall (different times) to the dfi dataframe  
-    dfi[nrow(dfi) + 1,] = dfi_fall[fall_rowindex,]
+    for (i in 1:length(loops)){
+      loop <- loops[[i]]
+      area <- trapz(loop$Qsi, loop$Csi)
+      if (area < 0){
+        negAreas = negAreas + area
+      } else {
+        posAreas = posAreas + area
+      }
+    }
     
-    dfi <- dfi[order(dfi$Itime),] # reorder in increasing time
-    row.names(dfi) <- NULL
-    
-    # split the data into the two loops of the figure eight
-    new_loop1 <- dfi %>% filter(Qsi <= myIntercept[1]) %>% select(Qsi, Csi) 
-    new_loop1$diff <- c(999.9, diff(new_loop1$Qsi)) 
-    new_loop1<- filter(new_loop1, diff != 0.0)
-    
-    
-    new_loop2 <- dfi %>% filter(Qsi >= myIntercept[1]) %>% select(Qsi, Csi)
-    new_loop2$diff <- c(999.9, diff(new_loop2$Qsi)) 
-    new_loop2<- filter(new_loop2, diff != 0.0)
-    
-    # remove repeat entries that follow each other (but not that close the loop ...)
-    
-    
-    area_loop1 <- trapz(new_loop1$Qsi, new_loop1$Csi)  # calculate the area of each loop
-    area_loop2 <- trapz(new_loop2$Qsi, new_loop2$Csi)
-    
-    total_area <- abs(area_loop1) + abs(area_loop2)  # add the area magnitudes together
-    area_sign <- get_sign_of_larger_area(area_loop1, area_loop2)  # determine if predominantly enriching (-) or diluting (+)
-    
+    total_area <- abs(negAreas) + abs(posAreas)  # add the area magnitudes together
+    area_sign <- get_sign_of_larger_area(negAreas, posAreas)  # determine if predominantly enriching (-) or diluting (+)
     area <- area_sign * total_area  # include sign with area metric
+    
     
   } else {  # single loop 
     area = trapz(dfi$Qsi, dfi$Csi)
@@ -502,16 +651,4 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
 # call the function
 harp = HARP(fileName = filename, eventName = eventname, constituentName = constituent_name, plotFileName = plot_filename )
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+print("HARP has completed")
