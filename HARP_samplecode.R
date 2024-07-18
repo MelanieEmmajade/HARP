@@ -397,12 +397,18 @@ HARP <- function(fileName, eventName, constituentName, plotFileName){
     df_ <- do.call(rbind, intersections)
     df_ <- as.data.frame(df_)
     
-    # Set column names
-    colnames(df_) <- c("Q", "C")
-    
-    intersections <- df_
-    return (intersections)
-  }
+    if (length(df_) == 0){
+          return(NULL)
+        }
+        else {
+          # Set column names
+          colnames(df_) <- c("Q", "C")
+          
+          intersections <- df_
+          return (intersections)
+        }
+        
+      }
   
   scale_the_intercepts <- function(df_intercepts, df_All){
     #' scaled_intercepts
